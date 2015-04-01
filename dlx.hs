@@ -11,16 +11,15 @@ data Cell = Cell { up, down, left, right, num, col :: Int } deriving (Eq, Show)
 mkCell n = Cell n n n n 0 0
 
 -- e.g. dlxSolve [ [0, 3]
---               , [1, 3]
+--               , [1, 2, 3]
 --               , [1, 2]
 --               , [0]]
 dlxSolve asgns = let
-  rows = length asgns
   cols = 1 + (foldl1' max $ concat asgns)
   ct = sum $ length <$> asgns
   in runST $ do
-    tmp <- newListArray (0, cols + rows + ct) $ map mkCell [0..] :: ST s (STArray s Int Cell)
-    nref <- newSTRef $ cols + rows + 1
+    tmp <- newListArray (0, cols + ct) $ map mkCell [0..] :: ST s (STArray s Int Cell)
+    nref <- newSTRef $ cols + 1
     let
       connectUD i j = do
         cell <- readArray tmp i
@@ -80,7 +79,6 @@ dlxSolve asgns = let
             return (c:rest)
         in readArray tmp c0 >>= f . dir
 
--- TODO UPDATE S
       coverCol c = do
         cell <- readArray tmp c
         connectLR (left cell) (right cell)
@@ -89,6 +87,8 @@ dlxSolve asgns = let
            cs <- go c right
            forM_ cs $ \c -> do
              cell <- readArray tmp c
+             ccell <- readArray tmp $ col cell
+             writeArray tmp (col cell) ccell { num = num ccell - 1 }
              connectUD (up cell) (down cell)
 
       uncoverCol c = do
@@ -98,45 +98,47 @@ dlxSolve asgns = let
            cs <- go c right
            forM_ cs $ \c -> do
              cell <- readArray tmp c
+             ccell <- readArray tmp $ col cell
+             writeArray tmp (col cell) ccell { num = num ccell + 1 }
              connectUD (up cell) c
              connectUD c (down cell)
         connectLR (left cell) c
         connectLR c (right cell)
 
-      solve f sol = do
+    zipWithM connectLR (cols:[0..cols-1]) [0..]
+    zipWithM addRow [cols+1..] asgns
+
+    let
+      solve sol = do
         cs <- todo
         case cs of
-          [] -> f sol
+          [] -> return $ [findRow <$> sol]
           cs -> let
             (c, s) = foldl1' (\a b -> if snd b < snd a then b else a) cs
-            in if s == 0 then return () else do
+            in if s == 0 then return [] else do
               coverCol c
               cs <- go c down
-              forM_ cs $ \c -> do
+              sols <- forM cs $ \c -> do
                 cs <- go c right
                 forM_ cs $ \c -> do
                   cell <- readArray tmp c
                   coverCol $ col cell
-                solve f (c:sol)
+                sols <- solve (c:sol)
                 forM_ cs $ \c -> do
                   cell <- readArray tmp c
                   uncoverCol $ col cell
-                
+                return sols
               uncoverCol c
-              {-
-              t <- getAssocs tmp
-              trace (unlines $ show <$> t) $ return ()
-              -}
+              return $ concat sols
 
-    -- zipWithM connectUD ((cols+) <$> (rows:[1..rows-1])) ((cols+) <$> [1..])
-    zipWithM connectLR (cols:[0..cols-1]) [0..]
-    zipWithM addRow [cols+1..] asgns
+      csum = scanl1 (+) (length <$> asgns)
+      findRow n = snd . head $ dropWhile ((<=n-cols-1) . fst) $ zip csum [0..]
 
-    -- getAssocs tmp
-    let f sol = traceShow ("SOL: ", sol) $ return ()
-
-    solve f []
-    todo
+    {-
+    t <- getAssocs tmp
+    trace (unlines $ show <$> t) $ return ()
+    -}
+    solve []
 
 --main = putStr . unlines $ show <$> dlxSolve [[0, 3], [0]]
 main = putStr . unlines $ show <$> dlxSolve [[0, 3], [1, 2, 3], [1, 2], [0]]
