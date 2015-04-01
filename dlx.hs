@@ -8,10 +8,6 @@ import Data.List
 import Data.List.Split
 import Data.Char
 
-data Cell = Cell { up, down, left, right, num :: Int } deriving (Eq, Show)
-
-mkCell n = Cell n n n n 0
-
 -- e.g. dlxSolve [ [0, 3]
 --               , [1, 2, 3]
 --               , [1, 2]
@@ -21,98 +17,82 @@ dlxSolve rows picks = runST $ do
     cols = 1 + maximum (concat rows)
     csum = scanl1 (+) (length <$> rows)
     ct = sum $ length <$> rows
-  tmp <- newListArray (0, cols + ct) $ map mkCell [0..] :: ST s (STArray s Int Cell)
-  nref <- newSTRef $ cols + 1
+  -- 0 = up, 1 = down, 2 = left, 3 = right, 4 = num
+  tmp <- newArray (0, 5*(1 + cols + ct)) $ 0 :: ST s (STUArray s Int Int)
   let
-    connectUD i j = do
-      cell <- readArray tmp i
-      writeArray tmp i cell { down = j }
-      cell <- readArray tmp j
-      writeArray tmp j cell { up = i }
-
-    connectLR i j = do
-      cell <- readArray tmp i
-      writeArray tmp i cell { right = j }
-      cell <- readArray tmp j
-      writeArray tmp j cell { left = i }
+    connectUD i j = writeArray tmp (i+1) j >> writeArray tmp j i
+    connectLR i j = writeArray tmp (i+3) j >> writeArray tmp (j+2) i
 
     addRow r cs = let 
-      helper start prev [] = connectLR prev start
+      n = length cs
+      f k c = let cn = 5*(c+1) in do
+        up <- readArray tmp cn
+        connectUD up (g k)
+        connectUD (g k) cn
+        writeArray tmp (g k + 4) cn
+        readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (1+)
+        return (k + 1)
 
-      helper start prev (c:cs) = do
-        -- "malloc"
-        n <- readSTRef nref
-        writeSTRef nref $ n + 1
-
-        -- Insert into column list.
-        let cn = c + 1 in do
-          ccell <- readArray tmp cn
-          connectUD (up ccell) n
-          connectUD n cn
-          -- Set col number.
-          cell <- readArray tmp n
-          writeArray tmp n cell { num = cn }
-          -- Increment s-count of column.
-          cell <- readArray tmp cn
-          writeArray tmp cn cell { num = 1 + num cell }
-
-        -- Insert into row list.
-        connectLR prev n
-
-        helper start n cs
-
+      g k = 5*(k+r)
       in do
-        n <- readSTRef nref
-        helper n n cs
+        foldM f 1 cs
+        zipWithM connectLR (g<$>(n:[1..])) (g<$>[1..n])
+        return $ r + n
 
     todo = let
       f 0 = return []
       f c = do
-        cell <- readArray tmp c
-        rest <- f $ right cell
-        return ((c, num cell):rest)
-      in readArray tmp 0 >>= f . right
+        right <- readArray tmp (c + 3)
+        s <- readArray tmp (c + 4)
+        rest <- f right
+        return ((c, s):rest)
+      in readArray tmp 3 >>= f
 
     go c0 dir = let
       f c
         | c == c0 = return []
         | True    = do
-          cell <- readArray tmp c
-          rest <- f $ dir cell
+          next <- readArray tmp (c + dir)
+          rest <- f next
           return (c:rest)
-      in readArray tmp c0 >>= f . dir
+      in readArray tmp (c0 + dir) >>= f
 
     coverCol c = do
-      cell <- readArray tmp c
-      connectLR (left cell) (right cell)
-      cs <- go c down
+      left <- readArray tmp (c + 2)
+      right <- readArray tmp (c + 3)
+      connectLR left right
+      cs <- go c 1
       forM_ cs $ \c -> do
-         cs <- go c right
+         cs <- go c 3
          forM_ cs $ \c -> do
-           cell <- readArray tmp c
-           ccell <- readArray tmp $ num cell
-           writeArray tmp (num cell) ccell { num = num ccell - 1 }
-           connectUD (up cell) (down cell)
+           cn <- readArray tmp (c + 4)
+           readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (+ (-1))
+           up <- readArray tmp c
+           down <- readArray tmp $ c + 1
+           connectUD up down
 
     uncoverCol c = do
-      cell <- readArray tmp c
-      cs <- go c up
+      cs <- go c 0
       forM_ cs $ \c -> do
-         cs <- go c left
+         cs <- go c 2
          forM_ cs $ \c -> do
-           cell <- readArray tmp c
-           ccell <- readArray tmp $ num cell
-           writeArray tmp (num cell) ccell { num = num ccell + 1 }
-           connectUD (up cell) c
-           connectUD c (down cell)
-      connectLR (left cell) c
-      connectLR c (right cell)
+           cn <- readArray tmp (c + 4)
+           readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (+ 1)
+           up <- readArray tmp c
+           down <- readArray tmp $ c + 1
+           writeArray tmp (up + 1) c
+           writeArray tmp down c
+      left <- readArray tmp (c + 2)
+      right <- readArray tmp (c + 3)
+      writeArray tmp (left + 3) c
+      writeArray tmp (right + 2) c
 
-  zipWithM connectLR (cols:[0..cols-1]) [0..]
-  zipWithM addRow [cols+1..] rows
+  forM ((5*)<$>(cols:[1..cols])) (\c -> do writeArray tmp c c >> writeArray tmp (c+1) c)
+  zipWithM connectLR ((5*)<$>(cols:[0..])) ((5*)<$>[0..cols])
+  foldM addRow cols rows
 
   let
-    findRow n = snd . head $ dropWhile ((<=n-cols-1) . fst) $ zip csum [0..]
+    findRow n = snd . head $ dropWhile ((<=(div n 5)-cols-1) . fst) $ zip csum [0..]
 
     solve sol = do
       cs <- todo
@@ -122,13 +102,13 @@ dlxSolve rows picks = runST $ do
           (c, s) = foldl1' (\a b -> if snd b < snd a then b else a) cs
           in if s == 0 then return [] else do
             coverCol c
-            cs <- go c down
+            cs <- go c 1
             sols <- forM cs $ \c -> do
-              cs <- go c right
-              forM_ cs $ \c -> readArray tmp c >>= coverCol . num
+              cs <- go c 3
+              forM_ cs $ \c -> readArray tmp (c + 4) >>= coverCol
               sols <- solve (c:sol)
-              cs <- go c left
-              forM_ cs $ \c -> readArray tmp c >>= uncoverCol . num
+              cs <- go c 2
+              forM_ cs $ \c -> readArray tmp (c + 4) >>= uncoverCol
               return sols
             uncoverCol c
             return $ concat sols
@@ -139,10 +119,10 @@ dlxSolve rows picks = runST $ do
 
   mapM_ (\r -> let c = (0:csum)!!r in
     -- Ignore empty rows.
-    if c == csum!!r then return () else let n = c + cols + 1 in do
-      readArray tmp n >>= coverCol . num
-      cs <- go n right
-      forM_ cs $ \c -> readArray tmp c >>= coverCol . num) picks
+    if c == csum!!r then return () else let n = 5*(c + cols + 1) in do
+      readArray tmp (n + 4) >>= coverCol
+      cs <- go n 3
+      forM_ cs $ \c -> readArray tmp (c + 4) >>= coverCol) picks
        
   solve []
 
@@ -156,7 +136,8 @@ wpex = ((+(-1)) <$>) <$>
   , [2, 7]
   ]
 
-wpmain = putStr . unlines $ show <$> dlxSolve wpex [3]
+wpmain = putStr . unlines $ show <$> dlxSolve wpex []
+main0 = print $ dlxSolve [ [0, 3] , [1, 2, 3] , [1, 2] , [0]] []
 
 sudex = concat
   [ ".......1."
