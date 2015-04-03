@@ -1,4 +1,3 @@
-import Debug.Trace
 import Control.Applicative
 import Control.Monad
 import Control.Monad.ST
@@ -18,7 +17,7 @@ dlxSolve rows picks = runST $ do
     csum = scanl1 (+) (length <$> rows)
     ct = sum $ length <$> rows
   -- 0 = up, 1 = down, 2 = left, 3 = right, 4 = num
-  tmp <- newArray (0, 5*(1 + cols + ct)) $ 0 :: ST s (STUArray s Int Int)
+  tmp <- newArray (0, 5*(1 + cols + ct) - 1) $ 0 :: ST s (STUArray s Int Int)
   let
     connectUD i j = writeArray tmp (i+1) j >> writeArray tmp j i
     connectLR i j = writeArray tmp (i+3) j >> writeArray tmp (j+2) i
@@ -38,91 +37,77 @@ dlxSolve rows picks = runST $ do
         foldM f 1 cs
         zipWithM connectLR (g<$>(n:[1..])) (g<$>[1..n])
         return $ r + n
-
+{-
     todo = let
       f 0 = return []
       f c = do
-        right <- readArray tmp (c + 3)
         s <- readArray tmp (c + 4)
-        rest <- f right
-        return ((c, s):rest)
+        ((c, s):) <$> (f <=< readArray tmp $ c + 3)
       in readArray tmp 3 >>= f
+-}
 
-    go c0 dir = let
+    todo = do
+      cs <- go 3 0
+      zip cs <$> mapM (readArray tmp . (+ 4)) cs
+
+    go dir c0 = let
       f c
         | c == c0 = return []
-        | True    = do
-          next <- readArray tmp (c + dir)
-          rest <- f next
-          return (c:rest)
+        | True    = (c:) <$> (readArray tmp (c + dir) >>= f)
       in readArray tmp (c0 + dir) >>= f
 
     coverCol c = do
       left <- readArray tmp (c + 2)
       right <- readArray tmp (c + 3)
       connectLR left right
-      cs <- go c 1
-      forM_ cs $ \c -> do
-         cs <- go c 3
-         forM_ cs $ \c -> do
-           cn <- readArray tmp (c + 4)
-           readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (+ (-1))
-           up <- readArray tmp c
-           down <- readArray tmp $ c + 1
-           connectUD up down
+      -- Slower:
+      -- join $ connectLR <$> readArray tmp (c + 2) <*> readArray tmp (c + 3)
+      go 1 c >>= mapM_ (go 3 >=> mapM_ (\c -> do
+        cn <- readArray tmp (c + 4)
+        readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (+ (-1))
+        up <- readArray tmp c
+        down <- readArray tmp $ c + 1
+        connectUD up down))
 
     uncoverCol c = do
-      cs <- go c 0
-      forM_ cs $ \c -> do
-         cs <- go c 2
-         forM_ cs $ \c -> do
-           cn <- readArray tmp (c + 4)
-           readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (+ 1)
-           up <- readArray tmp c
-           down <- readArray tmp $ c + 1
-           writeArray tmp (up + 1) c
-           writeArray tmp down c
-      left <- readArray tmp (c + 2)
-      right <- readArray tmp (c + 3)
-      writeArray tmp (left + 3) c
-      writeArray tmp (right + 2) c
+      go 0 c >>= mapM_ (go 2 >=> mapM_ (\c -> do
+        cn <- readArray tmp (c + 4)
+        readArray tmp (cn + 4) >>= writeArray tmp (cn + 4) . (+ 1)
+        readArray tmp c >>= flip (writeArray tmp) c . (+ 1)
+        readArray tmp (c + 1) >>= flip (writeArray tmp) c))
+      readArray tmp (c + 2) >>= flip (writeArray tmp) c . (+ 3)
+      readArray tmp (c + 3) >>= flip (writeArray tmp) c . (+ 2)
 
-  forM ((5*)<$>(cols:[1..cols])) (\c -> do writeArray tmp c c >> writeArray tmp (c+1) c)
+  forM_ ((5*)<$>(cols:[1..cols]))
+    $ \c -> writeArray tmp c c >> writeArray tmp (c+1) c
   zipWithM connectLR ((5*)<$>(cols:[0..])) ((5*)<$>[0..cols])
   foldM addRow cols rows
 
   let
-    findRow n = snd . head $ dropWhile ((<=(div n 5)-cols-1) . fst) $ zip csum [0..]
+    findRow n = snd . head
+      $ dropWhile ((<=(div n 5) - cols - 1) . fst) $ zip csum [0..]
 
     solve sol = do
       cs <- todo
       case cs of
         [] -> return $ [findRow <$> sol]
-        cs -> let
+        _  -> let
           (c, s) = foldl1' (\a b -> if snd b < snd a then b else a) cs
           in if s == 0 then return [] else do
             coverCol c
-            cs <- go c 1
-            sols <- forM cs $ \c -> do
-              cs <- go c 3
-              forM_ cs $ \c -> readArray tmp (c + 4) >>= coverCol
+            sols <- go 1 c >>= mapM (\c -> do
+              go 3 c >>= mapM_ (\c -> readArray tmp (c + 4) >>= coverCol)
               sols <- solve (c:sol)
-              cs <- go c 2
-              forM_ cs $ \c -> readArray tmp (c + 4) >>= uncoverCol
-              return sols
+              go 2 c >>= mapM_ (\c -> readArray tmp (c + 4) >>= uncoverCol)
+              return sols)
             uncoverCol c
             return $ concat sols
-  {-
-  t <- getAssocs tmp
-  trace (unlines $ show <$> t) $ return ()
-  -}
 
-  mapM_ (\r -> let c = (0:csum)!!r in
+  forM_ picks (\r -> let c = (0:csum)!!r in
     -- Ignore empty rows.
     if c == csum!!r then return () else let n = 5*(c + cols + 1) in do
       readArray tmp (n + 4) >>= coverCol
-      cs <- go n 3
-      forM_ cs $ \c -> readArray tmp (c + 4) >>= coverCol) picks
+      go 3 n >>= mapM_ (\c -> readArray tmp (c + 4) >>= coverCol))
        
   solve []
 
@@ -151,16 +136,14 @@ sudex = concat
   , "...8.6..."
   ]
 
+b9 a b c = 81*a + 9*b + c
+
+con r c d = [b9 0 r c, b9 1 r d, b9 2 c d, b9 3 ((div r 3)*3+(div c 3)) d]
+
+g ch n = 9*n + digitToInt ch - 1
+
+board = uncurry g <$> filter ((/='.') . fst) (zip sudex [0..])
+
 ds = [0..8]
 
-nine a b c = 81*a + 9*b + c
-
-f r c d = [nine 0 r c, nine 1 r d, nine 2 c d, nine 3 ((div r 3)*3+(div c 3)) d]
-
---main = putStr . unlines $ show <$> dlxSolve (f <$> ds <*> ds <*> ds) board
-
-g ch n = (digitToInt ch - 1)+n*9
-
-board = uncurry g <$> filter ((/='.') . fst) (zip sudex $ [0..])
-
-main = putStr . unlines . ((intToDigit <$>)<$>) . chunksOf 9 . ((+1) . (`mod`9) <$>) . sort $ board ++ (head $ dlxSolve (f <$> ds <*> ds <*> ds) board)
+main = putStr . unlines . ((intToDigit <$>)<$>) . chunksOf 9 . ((+1) . (`mod`9) <$>) . sort $ board ++ (head $ dlxSolve (con <$> ds <*> ds <*> ds) board)
