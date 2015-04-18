@@ -1,19 +1,22 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE QuasiQuotes #-}
---module DLX (dlxSolve) where
+module DLX (dlxSolve) where
 
 import Control.Applicative
 import Control.Monad
 import Control.Monad.ST
 import Data.Array.ST
 import Data.List
-import Data.List.Split
-import Data.Char
 
+-- |Returns exact covers. The second argument is the set of rows that must
+-- be part of the solution.
+--
 -- e.g. dlxSolve [ [0,       3]
 --               , [   1, 2, 3]
 --               , [   1, 2   ]
---               , [0         ] ]
+--               , [0         ], [] ]
+--
+-- returns the two solutions [[0, 2], [1, 3]].
 dlxSolve :: [[Int]] -> [Int] -> [[Int]]
 dlxSolve rows picks = runST $ do
   let
@@ -36,18 +39,18 @@ dlxSolve rows picks = runST $ do
     hideLR c = $( [| do
       -- Slower:
       --   join $ linkLR <$> readArray tmp (c + 2) <*> readArray tmp (c + 3)
-      left <- readArray tmp $ c + 2
+      left  <- readArray tmp $ c + 2
       right <- readArray tmp $ c + 3
       linkLR left right |] )
     hideUD c = $( [| do
-      up <- readArray tmp c
-      down <- readArray tmp $ c + 1
+      up    <- readArray tmp c
+      down  <- readArray tmp $ c + 1
       linkUD up down |] )
     unhideLR c = $( [| do
       readArray tmp (c + 2) >>= flip (writeArray tmp) c . (+ 3)
       readArray tmp (c + 3) >>= flip (writeArray tmp) c . (+ 2) |] )
     unhideUD c = $( [| do
-      readArray tmp c >>= flip (writeArray tmp) c . (+ 1)
+      readArray tmp  c      >>= flip (writeArray tmp) c . (+ 1)
       readArray tmp (c + 1) >>= flip (writeArray tmp) c |] )
     incS cn = $( [| readArray tmp (cn + 4)
       >>= writeArray tmp (cn + 4) . (+1) |] )
@@ -88,8 +91,8 @@ dlxSolve rows picks = runST $ do
     findRow n = snd . head
       $ dropWhile ((<= div n 5 - cols - 1) . fst) $ zip csum [0..]
 
-    todo = go 3 0 >>= \cs -> zip cs <$> mapM numOf cs
-    -- todo = go 3 0 >>= (<$>) <$> zip <*> mapM numOf
+    --todo = go 3 0 >>= \cs -> zip cs <$> mapM numOf cs
+    todo = go 3 0 >>= (<$>) <$> zip <*> mapM numOf
 
     solve sol = todo >>= \css -> case css of
       [] -> return $ [findRow <$> sol]
@@ -111,40 +114,3 @@ dlxSolve rows picks = runST $ do
         numOf n >>= coverCol >> go 3 n >>= mapM_ ((coverCol =<<) . numOf))
        
   solve []
-
-{-
-main0 = print $ dlxSolve [ [0, 3] , [1, 2, 3] , [1, 2] , [0]] []
-
-main1 = let
-  -- Example from http://en.wikipedia.org/wiki/Knuth's_Algorithm_X
-  ex = ((+(-1)) <$>) <$>
-    [ [1, 4, 7]
-    , [1, 4]
-    , [4, 5, 7]
-    , [3, 5, 6]
-    , [2, 3, 6, 7]
-    , [2, 7]
-    ]
-  in putStr . unlines $ show <$> dlxSolve ex []
--}
-
-main :: IO ()
-main = let
-  ex = concat
-    [ ".......1."
-    , "4........"
-    , ".2......."
-    , "....5.4.7"
-    , "..8...3.."
-    , "..1.9...."
-    , "3..4..2.."
-    , ".5.1....."
-    , "...8.6..."
-    ]
-  b9 a b c = 81*a + 9*b + c
-  con r c d = [b9 0 r c, b9 1 r d, b9 2 c d, b9 3 ((div r 3)*3+(div c 3)) d]
-  board = (\(ch, n) -> 9*n + digitToInt ch - 1)
-    <$> filter ((/='.') . fst) (zip ex [0..])
-  ds = [0..8]
-  in putStr . unlines . chunksOf 9 . (intToDigit . (+1) . (`mod` 9) <$>)
-    . sort $ board ++ (head $ dlxSolve (con <$> ds <*> ds <*> ds) board)
