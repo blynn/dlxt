@@ -1,0 +1,44 @@
+= DLXT =
+
+This is my DLX library rewritten in Haskell. At present, the "T" stands for
+"ten" because it's roughly 10 times slower than the C version. It's still fast
+enough for some programming contests, for which Haskell is my preferred choice.
+
+I developed the library mostly using GHC 7.6.3. The links dance within an ST
+monad, because the DLX algorithm fundamentally requires mutating state for
+speed. I used Template Haskell to inline function calls, which improved
+running times. For now, I'm out of ideas for squeezing more performance out
+of the code.
+
+My pentomino tiling test took about 2 minutes when compiled with GHC 7.6.3:
+
+------------------------------------------------------------------------------
+$ time ./pento
+9356
+
+real  1m59.191s
+user  1m58.504s
+sys 0m0.616s
+------------------------------------------------------------------------------
+
+GHC 7.8.3 is better:
+
+------------------------------------------------------------------------------
+$ time ./pento
+9356
+
+real  1m16.356s
+user  1m15.638s
+sys 0m0.648s
+------------------------------------------------------------------------------
+
+The C program it generated is naturally much faster:
+
+------------------------------------------------------------------------------
+$ time ./a.out
+9356
+
+real  0m11.448s
+user  0m11.437s
+sys 0m0.004s
+------------------------------------------------------------------------------
